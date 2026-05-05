@@ -18,3 +18,25 @@ node_modules/
 # TypeScript
 *.tsbuildinfo
 next-env.d.ts
+
+# Python / FastAPI backend
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Backend virtualenvs and large model artifacts (do NOT commit weights)
+backend/.venv/
+backend/venv/
+backend/static/
+backend/__pycache__/
+backend/weights/*
+!backend/weights/.gitkeep
+
+# IDE
+.idea/
+.vscode/
+.DS_Store

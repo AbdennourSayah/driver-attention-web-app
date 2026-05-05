@@ -34,7 +34,7 @@ export default function AboutPage() {
         </div>
         <div className="overflow-hidden rounded-xl border border-border">
           <Image
-            src="/images/saliency-overlay.jpg"
+            src="/images/saliency-example-1.png"
             alt="Example of saliency prediction overlay"
             width={500}
             height={280}
@@ -52,12 +52,13 @@ export default function AboutPage() {
             <CardHeader>
               <ImageIcon className="mb-2 h-6 w-6 text-primary" />
               <CardTitle className="text-base">RGB Input</CardTitle>
-              <CardDescription>Visual appearance processing</CardDescription>
+              <CardDescription>192×112 frames, Kinetics normalized</CardDescription>
             </CardHeader>
             <CardContent className="text-sm text-muted-foreground">
-              The model takes RGB frames from dashboard cameras as primary
-              input. Images are resized to a fixed resolution and normalized
-              before processing through the encoder network.
+              Dashboard-camera frames are resized to 192×112 and normalized
+              with the standard Kinetics statistics
+              (mean ≈ 0.432, 0.395, 0.376; std ≈ 0.228, 0.221, 0.217)
+              that match the R3D-18 pre-training distribution.
             </CardContent>
           </Card>
 
@@ -65,26 +66,27 @@ export default function AboutPage() {
             <CardHeader>
               <Timer className="mb-2 h-6 w-6 text-primary" />
               <CardTitle className="text-base">Temporal Clips</CardTitle>
-              <CardDescription>16-frame sequences</CardDescription>
+              <CardDescription>16-frame sliding window</CardDescription>
             </CardHeader>
             <CardContent className="text-sm text-muted-foreground">
-              To capture temporal dynamics, the model processes 16 consecutive
-              frames at a time. This allows learning attention patterns that
-              evolve over time, such as tracking moving objects.
+              The model consumes 16-frame clips so it can pick up motion cues
+              like overtaking vehicles or pedestrians stepping into the lane.
+              Single images are tiled across the temporal dimension at
+              inference time to use the same checkpoint.
             </CardContent>
           </Card>
 
           <Card className="bg-card">
             <CardHeader>
               <Layers className="mb-2 h-6 w-6 text-primary" />
-              <CardTitle className="text-base">CNN Encoder-Decoder</CardTitle>
-              <CardDescription>Feature extraction and generation</CardDescription>
+              <CardTitle className="text-base">R3D-18 + Decoder</CardTitle>
+              <CardDescription>Encoder–decoder with skip connections</CardDescription>
             </CardHeader>
             <CardContent className="text-sm text-muted-foreground">
-              The architecture uses a convolutional encoder to extract
-              hierarchical features, followed by a decoder that generates
-              pixel-wise saliency predictions. Skip connections preserve spatial
-              details.
+              A torchvision <code className="font-mono">r3d_18</code> backbone
+              extracts spatio-temporal features. The decoder is four
+              Conv→BN→ReLU stages with bilinear upsampling, dropout (p = 0.30)
+              and skip connections from temporally pooled encoder features.
             </CardContent>
           </Card>
 
@@ -92,12 +94,12 @@ export default function AboutPage() {
             <CardHeader>
               <Cpu className="mb-2 h-6 w-6 text-primary" />
               <CardTitle className="text-base">Saliency Output</CardTitle>
-              <CardDescription>Attention heatmaps</CardDescription>
+              <CardDescription>Sigmoid probability map</CardDescription>
             </CardHeader>
             <CardContent className="text-sm text-muted-foreground">
-              The final output is a probability map where each pixel represents
-              the likelihood of driver attention. Values are normalized to form
-              a valid probability distribution.
+              The final 1×112×192 sigmoid map is upsampled back to the input
+              resolution. Training optimizes a weighted sum of CC, KL and NSS
+              (1.0·(1-CC) + 0.3·KL + 0.2·(1-NSS/6)) for stable convergence.
             </CardContent>
           </Card>
         </div>

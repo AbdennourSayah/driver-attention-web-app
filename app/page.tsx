@@ -47,7 +47,7 @@ export default function HomePage() {
           <div className="relative">
             <div className="overflow-hidden rounded-xl border border-border bg-card p-2">
               <Image
-                src="/images/saliency-overlay.jpg"
+                src="/images/saliency-example-1.png"
                 alt="Driver attention saliency map overlay on driving scene"
                 width={600}
                 height={400}
@@ -56,7 +56,7 @@ export default function HomePage() {
             </div>
             <div className="absolute -bottom-4 -left-4 z-10 overflow-hidden rounded-lg border border-border bg-card p-1.5 shadow-xl">
               <Image
-                src="/images/saliency-map-1.jpg"
+                src="/images/saliency-example-2.jpg"
                 alt="Saliency heatmap visualization"
                 width={180}
                 height={120}
@@ -80,7 +80,7 @@ export default function HomePage() {
             </CardHeader>
             <CardContent className="p-0">
               <Image
-                src="/images/driving-scene-1.jpg"
+                src="/images/saliency-example-3.jpg"
                 alt="Highway driving scene from driver perspective"
                 width={600}
                 height={340}
@@ -95,7 +95,7 @@ export default function HomePage() {
             </CardHeader>
             <CardContent className="p-0">
               <Image
-                src="/images/saliency-map-1.jpg"
+                src="/images/saliency-example-1.png"
                 alt="Predicted attention saliency map"
                 width={600}
                 height={340}
@@ -195,7 +195,7 @@ export default function HomePage() {
 
               <div className="overflow-hidden rounded-lg">
                 <Image
-                  src="/images/driving-scene-2.jpg"
+                  src="/images/saliency-example-2.jpg"
                   alt="Urban driving scene example from dataset"
                   width={500}
                   height={280}
