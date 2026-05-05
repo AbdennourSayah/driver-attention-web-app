@@ -1,0 +1,12 @@
+fastapi>=0.111
+uvicorn[standard]>=0.30
+python-multipart>=0.0.9
+pydantic>=2.7
+numpy>=1.24
+Pillow>=10.0
+opencv-python-headless>=4.8
+# PyTorch / torchvision: pin loose ranges so users on CUDA / CPU can both
+# install. If you need a specific CUDA build, follow the official
+# selector at https://pytorch.org/get-started/locally/.
+torch>=2.1
+torchvision>=0.16
