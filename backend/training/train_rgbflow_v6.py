@@ -860,6 +860,11 @@ def compute_ig(
     gt: torch.Tensor,
     baseline: torch.Tensor,
 ) -> torch.Tensor:
+    # Always move ``baseline`` to ``pred``'s device — the loss is also
+    # called from training with a CPU-resident baseline tensor, which
+    # would otherwise raise "Expected all tensors to be on the same
+    # device" at the first step.
+    baseline = baseline.to(pred.device)
     pred, gt, baseline = _to_fp32(pred), _to_fp32(gt), _to_fp32(baseline)
     gt = F.interpolate(
         gt, size=pred.shape[-2:], mode="bilinear", align_corners=False
@@ -1484,7 +1489,11 @@ def main() -> None:
     )
 
     # --- Center-bias prior for IG ----------------------------------
-    baseline = compute_training_mean_baseline(train_clips, cfg)
+    # Move the prior onto the training device once so per-batch
+    # ``compute_ig`` does not pay the host->device copy on every step.
+    baseline = compute_training_mean_baseline(train_clips, cfg).to(
+        cfg.DEVICE
+    )
 
     # --- Build model ------------------------------------------------
     print("\n  Building model...")
