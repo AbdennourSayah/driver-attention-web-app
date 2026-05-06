@@ -76,13 +76,20 @@ STATIC_DIR = Path(os.getenv("DREYEVE_STATIC_DIR", BACKEND_ROOT / "static"))
 STATIC_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def _list_available_weights() -> list[str]:
+def _iter_pth_files() -> list[Path]:
     """Return all `.pth` files in WEIGHTS_DIR (sorted by mtime, newest first)."""
     if not WEIGHTS_DIR.is_dir():
         return []
     files = [p for p in WEIGHTS_DIR.glob("*.pth") if p.is_file()]
+    # Some shells/zip tools also produce `.PTH` on macOS/Windows. Catch them.
+    files += [p for p in WEIGHTS_DIR.glob("*.PTH") if p.is_file() and p not in files]
     files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-    return [p.name for p in files]
+    return files
+
+
+def _list_available_weights() -> list[str]:
+    """Return all `.pth` filenames in WEIGHTS_DIR (sorted by mtime, newest first)."""
+    return [p.name for p in _iter_pth_files()]
 
 
 def _resolve_weights_path() -> Path | None:
@@ -90,18 +97,21 @@ def _resolve_weights_path() -> Path | None:
 
     Resolution order:
       1. ``DREYEVE_RGB_WEIGHTS`` env var, if it points to an existing file.
-      2. ``WEIGHTS_DIR/<name>`` for each name in :data:`WEIGHT_FILENAME_CANDIDATES`.
+      2. Any case variant of the names in :data:`WEIGHT_FILENAME_CANDIDATES`
+         (so ``RGB.pth``, ``Rgb.pth``, etc. all match on case-sensitive
+         filesystems like Linux).
       3. The most-recently-modified ``*.pth`` file in ``WEIGHTS_DIR``.
     """
     if RGB_WEIGHTS_PATH.is_file():
         return RGB_WEIGHTS_PATH
+    pth_files = _iter_pth_files()
+    by_lower = {p.name.lower(): p for p in pth_files}
     for name in WEIGHT_FILENAME_CANDIDATES:
-        candidate = WEIGHTS_DIR / name
-        if candidate.is_file():
-            return candidate
-    available = _list_available_weights()
-    if available:
-        return WEIGHTS_DIR / available[0]
+        match = by_lower.get(name.lower())
+        if match is not None:
+            return match
+    if pth_files:
+        return pth_files[0]
     return None
 
 MAX_IMAGE_BYTES = int(os.getenv("DREYEVE_MAX_IMAGE_BYTES", 20 * 1024 * 1024))   # 20 MB
@@ -163,9 +173,15 @@ STATE = ModelState()
 INFER_LOCK = asyncio.Lock()
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """Load the RGB checkpoint once when the server starts."""
+def _attempt_model_load() -> None:
+    """Try to (re)load the RGB checkpoint into ``STATE``.
+
+    Safe to call repeatedly: it always refreshes ``available_weights``,
+    and if a checkpoint can be resolved it overwrites ``STATE.model`` /
+    ``STATE.info`` / ``STATE.weights_path``. On any failure the previous
+    state is preserved (so a transient bad file doesn't drop a working
+    model) and ``STATE.error`` is updated.
+    """
     WEIGHTS_DIR.mkdir(parents=True, exist_ok=True)
     STATE.available_weights = _list_available_weights()
     weights = _resolve_weights_path()
@@ -173,36 +189,51 @@ async def lifespan(app: FastAPI):
     if weights is None:
         STATE.error = (
             f"No checkpoint found in {WEIGHTS_DIR}. "
-            f"Drop a rgb.pth (or any .pth) file into '{WEIGHTS_DIR}/' and "
-            "restart the server. /predict endpoints return 503 until then."
+            f"Drop a rgb.pth (or any .pth) file into '{WEIGHTS_DIR}' "
+            "and click Refresh (or restart uvicorn)."
         )
         logger.warning(STATE.error)
-        # Still build an empty model so /health can report shape info.
-        STATE.model = DRNetRGB(MODEL_CFG).to(DEVICE).eval()
-    else:
-        try:
-            model, info = build_rgb_model(str(weights), device=DEVICE, cfg=MODEL_CFG)
-            STATE.model = model
-            STATE.info = info
-            STATE.weights_path = weights
-            STATE.loaded_at = time.time()
-            logger.info(
-                "Loaded RGB weights from %s (loaded=%s, missing=%s, skipped=%s)",
-                weights,
-                info.get("loaded") if info else None,
-                len(info.get("missing", [])) if info else 0,
-                len(info.get("skipped", [])) if info else 0,
-            )
-        except Exception as exc:  # pragma: no cover - depends on user weights
-            STATE.error = (
-                f"Failed to load checkpoint '{weights}': {exc}. "
-                "Verify the file is a DRNetRGB state_dict."
-            )
+        if STATE.model is None:
+            # Build an empty model so /health can still report shape info.
             STATE.model = DRNetRGB(MODEL_CFG).to(DEVICE).eval()
-            logger.exception("Failed to load RGB checkpoint")
+        STATE.weights_path = None
+        STATE.info = None
+        return
 
+    try:
+        model, info = build_rgb_model(str(weights), device=DEVICE, cfg=MODEL_CFG)
+    except Exception as exc:
+        STATE.error = (
+            f"Failed to load checkpoint '{weights.name}': {exc}. "
+            "Verify the file is a DRNetRGB state_dict produced by the "
+            "training script (torch.save({'state_dict': model.state_dict(), ...}))."
+        )
+        if STATE.model is None:
+            STATE.model = DRNetRGB(MODEL_CFG).to(DEVICE).eval()
+        STATE.weights_path = None
+        STATE.info = None
+        logger.exception("Failed to load RGB checkpoint at %s", weights)
+        return
+
+    STATE.model = model
+    STATE.info = info
+    STATE.weights_path = weights
+    STATE.loaded_at = time.time()
+    STATE.error = None
+    logger.info(
+        "Loaded RGB weights from %s (loaded=%s, missing=%s, skipped=%s)",
+        weights,
+        info.get("loaded") if info else None,
+        len(info.get("missing", [])) if info else 0,
+        len(info.get("skipped", [])) if info else 0,
+    )
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Load the RGB checkpoint once when the server starts."""
+    _attempt_model_load()
     yield
-
     STATE.model = None
 
 
@@ -268,6 +299,16 @@ class ChatRequest(BaseModel):
 
 class ChatResponse(BaseModel):
     response: str
+
+
+class ReloadResponse(BaseModel):
+    reloaded: bool
+    weights_path: Optional[str] = None
+    error: Optional[str] = None
+    available_weights: list[str] = Field(default_factory=list)
+    loaded_tensors: Optional[int] = None
+    skipped_tensors: Optional[int] = None
+    missing_tensors: Optional[int] = None
 
 
 # ---------------------------------------------------------------------------
@@ -403,12 +444,8 @@ def _run_clip_inference(clip: torch.Tensor) -> torch.Tensor:
 # ---------------------------------------------------------------------------
 
 
-@app.get("/health", response_model=HealthResponse)
-async def health() -> HealthResponse:
+def _build_health_payload() -> HealthResponse:
     info = STATE.info or {}
-    # Refresh the weights listing on every probe so users see new files
-    # without restarting the server.
-    STATE.available_weights = _list_available_weights()
     return HealthResponse(
         status="ok" if STATE.weights_path else "degraded",
         model_loaded=STATE.weights_path is not None,
@@ -417,6 +454,47 @@ async def health() -> HealthResponse:
         available_weights=STATE.available_weights,
         device=DEVICE,
         error=STATE.error,
+        loaded_tensors=info.get("loaded"),
+        skipped_tensors=len(info.get("skipped", [])) if info else None,
+        missing_tensors=len(info.get("missing", [])) if info else None,
+    )
+
+
+@app.get("/health", response_model=HealthResponse)
+async def health() -> HealthResponse:
+    # Refresh the weights listing on every probe so users see new files
+    # without restarting the server, and lazily retry the load if a file
+    # has appeared since the last attempt.
+    previous = STATE.available_weights
+    STATE.available_weights = _list_available_weights()
+    if STATE.weights_path is None and STATE.available_weights and (
+        not previous
+        or set(previous) != set(STATE.available_weights)
+        or STATE.error is None
+        or STATE.error.startswith("No checkpoint found")
+    ):
+        async with INFER_LOCK:
+            if STATE.weights_path is None:
+                await asyncio.to_thread(_attempt_model_load)
+    return _build_health_payload()
+
+
+@app.post("/reload", response_model=ReloadResponse)
+async def reload_weights() -> ReloadResponse:
+    """Force a re-scan of WEIGHTS_DIR and (re)load the resolved checkpoint.
+
+    Useful when the user dropped ``rgb.pth`` after the server was already
+    running — the popover Refresh button calls this so they don't have to
+    restart uvicorn.
+    """
+    async with INFER_LOCK:
+        await asyncio.to_thread(_attempt_model_load)
+    info = STATE.info or {}
+    return ReloadResponse(
+        reloaded=STATE.weights_path is not None,
+        weights_path=str(STATE.weights_path) if STATE.weights_path else None,
+        error=STATE.error,
+        available_weights=STATE.available_weights,
         loaded_tensors=info.get("loaded"),
         skipped_tensors=len(info.get("skipped", [])) if info else None,
         missing_tensors=len(info.get("missing", [])) if info else None,
