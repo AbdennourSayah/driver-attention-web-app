@@ -29,10 +29,15 @@ export interface HealthResponse {
   status: "ok" | "degraded" | string;
   model_loaded: boolean;
   weights_path: string | null;
+  weights_dir: string;
+  available_weights: string[];
   device: string;
   error: string | null;
   input_shape: number[];
   output_shape: number[];
+  loaded_tensors: number | null;
+  skipped_tensors: number | null;
+  missing_tensors: number | null;
 }
 
 export interface PredictionResponse {

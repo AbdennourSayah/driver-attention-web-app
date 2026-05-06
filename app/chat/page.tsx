@@ -5,8 +5,9 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Badge } from "@/components/ui/badge";
 import { sendChatMessage, type ChatMessage } from "@/lib/api";
-import { Send, Bot, User, Loader2, Lightbulb } from "lucide-react";
+import { Send, Bot, User, Loader2, Lightbulb, MessageCircle, Sparkles } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const suggestedQuestions = [
@@ -69,14 +70,12 @@ export default function ChatPage() {
   ]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
-  const scrollRef = useRef<HTMLDivElement>(null);
+  const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-    }
-  }, [messages]);
+    bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+  }, [messages, isLoading]);
 
   const handleSend = async (message?: string) => {
     const text = message || input.trim();
@@ -95,13 +94,14 @@ export default function ChatPage() {
       ]);
     } catch {
       // Use mock response when backend is not available
-      await new Promise((resolve) => setTimeout(resolve, 800));
+      await new Promise((resolve) => setTimeout(resolve, 600));
       setMessages((prev) => [
         ...prev,
         { role: "assistant", content: getMockResponse(text) },
       ]);
     } finally {
       setIsLoading(false);
+      inputRef.current?.focus();
     }
   };
 
@@ -112,23 +112,42 @@ export default function ChatPage() {
     }
   };
 
+  const handleClear = () => {
+    setMessages([
+      {
+        role: "assistant",
+        content:
+          "Hi again! Ask me anything about the model, training, or the DR(eye)VE dataset.",
+      },
+    ]);
+  };
+
   return (
-    <div className="mx-auto max-w-4xl px-4 py-12">
-      <div className="mb-8">
-        <h1 className="mb-2 text-3xl font-bold tracking-tight">
-          Thesis Assistant
-        </h1>
-        <p className="text-muted-foreground">
-          Ask questions about driver attention prediction, saliency maps, and
-          the research methodology.
-        </p>
+    <div className="mx-auto max-w-5xl px-4 py-12">
+      <div className="mb-8 flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+        <div>
+          <Badge variant="outline" className="mb-3 gap-1.5 border-primary/30 bg-primary/5 text-primary">
+            <MessageCircle className="h-3 w-3" />
+            Q&amp;A assistant
+          </Badge>
+          <h1 className="mb-2 text-3xl font-bold tracking-tight md:text-4xl">
+            Thesis Assistant
+          </h1>
+          <p className="max-w-xl text-muted-foreground">
+            Ask anything about driver attention prediction, the architecture,
+            evaluation metrics, or the DR(eye)VE dataset.
+          </p>
+        </div>
+        <Button variant="outline" size="sm" onClick={handleClear}>
+          New chat
+        </Button>
       </div>
 
       <div className="grid gap-6 lg:grid-cols-3">
         {/* Chat Area */}
-        <Card className="bg-card lg:col-span-2">
-          <CardContent className="flex h-[500px] flex-col p-0">
-            <ScrollArea className="flex-1 p-4" ref={scrollRef}>
+        <Card className="bg-card/60 backdrop-blur-sm lg:col-span-2">
+          <CardContent className="flex h-[560px] flex-col p-0">
+            <ScrollArea className="flex-1 p-4">
               <div className="space-y-4">
                 {messages.map((message, index) => (
                   <div
@@ -139,16 +158,16 @@ export default function ChatPage() {
                     )}
                   >
                     {message.role === "assistant" && (
-                      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground">
+                      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-sm">
                         <Bot className="h-4 w-4" />
                       </div>
                     )}
                     <div
                       className={cn(
-                        "max-w-[80%] rounded-lg px-4 py-2 text-sm",
+                        "max-w-[80%] whitespace-pre-wrap rounded-2xl px-4 py-2.5 text-sm leading-relaxed shadow-sm",
                         message.role === "user"
-                          ? "bg-primary text-primary-foreground"
-                          : "bg-secondary text-secondary-foreground"
+                          ? "rounded-br-sm bg-primary text-primary-foreground"
+                          : "rounded-bl-sm border border-border bg-secondary text-secondary-foreground"
                       )}
                     >
                       {message.content}
@@ -162,25 +181,26 @@ export default function ChatPage() {
                 ))}
                 {isLoading && (
                   <div className="flex gap-3">
-                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground">
+                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-sm">
                       <Bot className="h-4 w-4" />
                     </div>
-                    <div className="flex items-center rounded-lg bg-secondary px-4 py-2">
+                    <div className="flex items-center rounded-2xl rounded-bl-sm border border-border bg-secondary px-4 py-2.5 text-sm">
                       <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
                     </div>
                   </div>
                 )}
+                <div ref={bottomRef} aria-hidden />
               </div>
             </ScrollArea>
 
-            <div className="border-t border-border p-4">
+            <div className="border-t border-border p-3">
               <div className="flex gap-2">
                 <Input
                   ref={inputRef}
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
                   onKeyDown={handleKeyDown}
-                  placeholder="Ask about driver attention, saliency maps..."
+                  placeholder="Ask about driver attention, saliency maps…"
                   disabled={isLoading}
                   className="flex-1"
                 />
@@ -188,33 +208,40 @@ export default function ChatPage() {
                   onClick={() => handleSend()}
                   disabled={!input.trim() || isLoading}
                   size="icon"
+                  aria-label="Send message"
                 >
                   <Send className="h-4 w-4" />
                 </Button>
               </div>
+              <p className="mt-2 text-[11px] text-muted-foreground">
+                Falls back to canned answers when the backend{" "}
+                <code className="font-mono">/chat</code> endpoint is not
+                reachable.
+              </p>
             </div>
           </CardContent>
         </Card>
 
         {/* Suggested Questions */}
-        <Card className="bg-card">
+        <Card className="bg-card/60 backdrop-blur-sm">
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-sm font-medium">
               <Lightbulb className="h-4 w-4 text-primary" />
-              Suggested Questions
+              Suggested questions
             </CardTitle>
           </CardHeader>
           <CardContent>
             <div className="flex flex-col gap-2">
-              {suggestedQuestions.map((question, index) => (
+              {suggestedQuestions.map((question) => (
                 <Button
-                  key={index}
+                  key={question}
                   variant="ghost"
-                  className="h-auto justify-start whitespace-normal px-3 py-2 text-left text-sm font-normal text-muted-foreground hover:text-foreground"
+                  className="h-auto justify-start whitespace-normal rounded-lg px-3 py-2 text-left text-sm font-normal text-muted-foreground hover:bg-secondary/60 hover:text-foreground"
                   onClick={() => handleSend(question)}
                   disabled={isLoading}
                 >
-                  {question}
+                  <Sparkles className="mr-2 h-3.5 w-3.5 shrink-0 text-primary/70" />
+                  <span className="flex-1">{question}</span>
                 </Button>
               ))}
             </div>
