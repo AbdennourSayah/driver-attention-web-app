@@ -130,6 +130,21 @@ export async function getHealth(): Promise<HealthResponse> {
   return request<HealthResponse>("/health", { method: "GET" }, 8_000);
 }
 
+export interface ReloadResponse {
+  reloaded: boolean;
+  weights_path: string | null;
+  error: string | null;
+  available_weights: string[];
+  loaded_tensors: number | null;
+  skipped_tensors: number | null;
+  missing_tensors: number | null;
+}
+
+export async function reloadBackend(): Promise<ReloadResponse> {
+  // Loading a checkpoint can take several seconds on CPU, so be generous.
+  return request<ReloadResponse>("/reload", { method: "POST" }, 60_000);
+}
+
 export async function predictImage(
   imageFile: File,
   model: string

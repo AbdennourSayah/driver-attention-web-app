@@ -10,7 +10,13 @@ import {
   RefreshCw,
 } from "lucide-react";
 
-import { API_BASE_URL, getHealth, type HealthResponse } from "@/lib/api";
+import {
+  API_BASE_URL,
+  ApiError,
+  getHealth,
+  reloadBackend,
+  type HealthResponse,
+} from "@/lib/api";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -46,13 +52,16 @@ export function BackendStatus({
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [refreshing, setRefreshing] = useState(false);
 
+  const applyHealth = (result: HealthResponse) => {
+    setHealth(result);
+    const next: Status = result.model_loaded ? "ok" : "degraded";
+    setStatus(next);
+    onChange?.(next, result);
+  };
+
   const probe = async () => {
     try {
-      const result = await getHealth();
-      setHealth(result);
-      const next: Status = result.model_loaded ? "ok" : "degraded";
-      setStatus(next);
-      onChange?.(next, result);
+      applyHealth(await getHealth());
     } catch {
       setStatus("down");
       setHealth(null);
@@ -77,8 +86,43 @@ export function BackendStatus({
 
   const handleRefresh = async () => {
     setRefreshing(true);
-    await probe();
-    setRefreshing(false);
+    try {
+      // If the model isn't loaded yet, force the backend to re-scan the
+      // weights directory and try to load — saves the user a uvicorn
+      // restart when they drop in `rgb.pth` after launching the server.
+      if (status !== "ok") {
+        try {
+          const reload = await reloadBackend();
+          // /reload returns the same shape as /health (minus a few keys).
+          // Synthesise a HealthResponse so the UI updates immediately.
+          applyHealth({
+            status: reload.reloaded ? "ok" : "degraded",
+            model_loaded: reload.reloaded,
+            weights_path: reload.weights_path,
+            weights_dir: health?.weights_dir ?? "",
+            available_weights: reload.available_weights,
+            device: health?.device ?? "cpu",
+            error: reload.error,
+            input_shape: health?.input_shape ?? [3, 16, 112, 192],
+            output_shape: health?.output_shape ?? [1, 112, 192],
+            loaded_tensors: reload.loaded_tensors,
+            skipped_tensors: reload.skipped_tensors,
+            missing_tensors: reload.missing_tensors,
+          });
+          // Always re-probe to pick up any fields /reload doesn't return.
+          await probe();
+          return;
+        } catch (err) {
+          // Older backends (pre-/reload) — fall back to a plain health probe.
+          if (!(err instanceof ApiError) || err.status !== 404) {
+            // Surface non-404 errors via the regular probe path.
+          }
+        }
+      }
+      await probe();
+    } finally {
+      setRefreshing(false);
+    }
   };
 
   const Icon =
@@ -174,7 +218,11 @@ export function BackendStatus({
               </div>
               {health?.available_weights && health.available_weights.length > 0 ? (
                 <div>
-                  <div className="text-muted-foreground">Found, but failed:</div>
+                  <div className="text-muted-foreground">
+                    {health.error?.startsWith("Failed to load")
+                      ? "Detected, but load failed:"
+                      : "Detected in folder:"}
+                  </div>
                   <ul className="mt-1 list-inside list-disc text-muted-foreground">
                     {health.available_weights.slice(0, 4).map((name) => (
                       <li key={name} className="font-mono">
@@ -182,13 +230,20 @@ export function BackendStatus({
                       </li>
                     ))}
                   </ul>
+                  {!health.error?.startsWith("Failed to load") && (
+                    <p className="mt-2 text-muted-foreground">
+                      Click <span className="font-medium">Refresh</span> above
+                      to load it now (no restart needed).
+                    </p>
+                  )}
                 </div>
               ) : (
                 <p className="text-muted-foreground">
                   Drop your trained{" "}
                   <code className="font-mono">rgb.pth</code> into that folder
-                  and restart{" "}
-                  <code className="font-mono">uvicorn backend.api:app</code>.
+                  and click <span className="font-medium">Refresh</span> above
+                  (or restart{" "}
+                  <code className="font-mono">uvicorn backend.api:app</code>).
                 </p>
               )}
             </div>
