@@ -62,8 +62,47 @@ BACKEND_ROOT = Path(__file__).resolve().parent
 WEIGHTS_DIR = Path(os.getenv("DREYEVE_WEIGHTS_DIR", BACKEND_ROOT / "weights"))
 RGB_WEIGHTS_PATH = Path(os.getenv("DREYEVE_RGB_WEIGHTS", WEIGHTS_DIR / "rgb.pth"))
 
+# Preferred filenames searched in WEIGHTS_DIR when DREYEVE_RGB_WEIGHTS is not
+# explicitly set and `rgb.pth` is missing. Order matters — the first match wins.
+WEIGHT_FILENAME_CANDIDATES = (
+    "rgb.pth",
+    "best_model.pth",
+    "latest.pth",
+    "checkpoint.pth",
+    "model.pth",
+)
+
 STATIC_DIR = Path(os.getenv("DREYEVE_STATIC_DIR", BACKEND_ROOT / "static"))
 STATIC_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _list_available_weights() -> list[str]:
+    """Return all `.pth` files in WEIGHTS_DIR (sorted by mtime, newest first)."""
+    if not WEIGHTS_DIR.is_dir():
+        return []
+    files = [p for p in WEIGHTS_DIR.glob("*.pth") if p.is_file()]
+    files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    return [p.name for p in files]
+
+
+def _resolve_weights_path() -> Path | None:
+    """Locate the RGB checkpoint to load.
+
+    Resolution order:
+      1. ``DREYEVE_RGB_WEIGHTS`` env var, if it points to an existing file.
+      2. ``WEIGHTS_DIR/<name>`` for each name in :data:`WEIGHT_FILENAME_CANDIDATES`.
+      3. The most-recently-modified ``*.pth`` file in ``WEIGHTS_DIR``.
+    """
+    if RGB_WEIGHTS_PATH.is_file():
+        return RGB_WEIGHTS_PATH
+    for name in WEIGHT_FILENAME_CANDIDATES:
+        candidate = WEIGHTS_DIR / name
+        if candidate.is_file():
+            return candidate
+    available = _list_available_weights()
+    if available:
+        return WEIGHTS_DIR / available[0]
+    return None
 
 MAX_IMAGE_BYTES = int(os.getenv("DREYEVE_MAX_IMAGE_BYTES", 20 * 1024 * 1024))   # 20 MB
 MAX_VIDEO_BYTES = int(os.getenv("DREYEVE_MAX_VIDEO_BYTES", 200 * 1024 * 1024))  # 200 MB
@@ -117,6 +156,7 @@ class ModelState:
     error: Optional[str] = None
     loaded_at: Optional[float] = None
     weights_path: Optional[Path] = None
+    available_weights: list[str] = []
 
 
 STATE = ModelState()
@@ -126,12 +166,15 @@ INFER_LOCK = asyncio.Lock()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Load the RGB checkpoint once when the server starts."""
-    weights = RGB_WEIGHTS_PATH if RGB_WEIGHTS_PATH.is_file() else None
+    WEIGHTS_DIR.mkdir(parents=True, exist_ok=True)
+    STATE.available_weights = _list_available_weights()
+    weights = _resolve_weights_path()
+
     if weights is None:
         STATE.error = (
-            f"RGB checkpoint not found at {RGB_WEIGHTS_PATH}. The server is "
-            "running but /predict endpoints will return 503 until you copy "
-            "rgb.pth into the weights directory."
+            f"No checkpoint found in {WEIGHTS_DIR}. "
+            f"Drop a rgb.pth (or any .pth) file into '{WEIGHTS_DIR}/' and "
+            "restart the server. /predict endpoints return 503 until then."
         )
         logger.warning(STATE.error)
         # Still build an empty model so /health can report shape info.
@@ -151,7 +194,10 @@ async def lifespan(app: FastAPI):
                 len(info.get("skipped", [])) if info else 0,
             )
         except Exception as exc:  # pragma: no cover - depends on user weights
-            STATE.error = f"Failed to load checkpoint {weights}: {exc}"
+            STATE.error = (
+                f"Failed to load checkpoint '{weights}': {exc}. "
+                "Verify the file is a DRNetRGB state_dict."
+            )
             STATE.model = DRNetRGB(MODEL_CFG).to(DEVICE).eval()
             logger.exception("Failed to load RGB checkpoint")
 
@@ -186,10 +232,15 @@ class HealthResponse(BaseModel):
     status: str
     model_loaded: bool
     weights_path: Optional[str] = None
+    weights_dir: str
+    available_weights: list[str] = Field(default_factory=list)
     device: str
     error: Optional[str] = None
     input_shape: list[int] = Field(default_factory=lambda: [3, 16, 112, 192])
     output_shape: list[int] = Field(default_factory=lambda: [1, 112, 192])
+    loaded_tensors: Optional[int] = None
+    skipped_tensors: Optional[int] = None
+    missing_tensors: Optional[int] = None
 
 
 class PredictionResponse(BaseModel):
@@ -316,7 +367,10 @@ def _ensure_model_ready() -> DRNetRGB:
         raise HTTPException(
             status_code=503,
             detail=STATE.error
-            or "Model is not loaded. Place rgb.pth under backend/weights/.",
+            or (
+                f"Model is not loaded. Place rgb.pth in '{WEIGHTS_DIR}/' and "
+                "restart `uvicorn backend.api:app`."
+            ),
         )
     return STATE.model
 
@@ -351,12 +405,21 @@ def _run_clip_inference(clip: torch.Tensor) -> torch.Tensor:
 
 @app.get("/health", response_model=HealthResponse)
 async def health() -> HealthResponse:
+    info = STATE.info or {}
+    # Refresh the weights listing on every probe so users see new files
+    # without restarting the server.
+    STATE.available_weights = _list_available_weights()
     return HealthResponse(
         status="ok" if STATE.weights_path else "degraded",
         model_loaded=STATE.weights_path is not None,
         weights_path=str(STATE.weights_path) if STATE.weights_path else None,
+        weights_dir=str(WEIGHTS_DIR),
+        available_weights=STATE.available_weights,
         device=DEVICE,
         error=STATE.error,
+        loaded_tensors=info.get("loaded"),
+        skipped_tensors=len(info.get("skipped", [])) if info else None,
+        missing_tensors=len(info.get("missing", [])) if info else None,
     )
 
 
